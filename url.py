@@ -1,4 +1,5 @@
 import socket
+import ssl
 
 
 class URL:
@@ -10,10 +11,24 @@ class URL:
             Url for the request
         """
         # parses url, could be done with urllib
+        self.url = url
         self.scheme, url = url.split('://', 1)
+
         if '/' not in url:
             url += '/'
         self.host, url = url.split('/', 1)
+
+        # default port numbers
+        if self.scheme == 'http':
+            self.port = 80
+        elif self.scheme == 'https':
+            self.port = 443
+
+        # support of custom port
+        if ':' in self.host:
+            self.host, port = self.host.split(':', 1)
+            self.port = int(port)
+
         self.path = '/' + url
 
     def request(self):
@@ -31,7 +46,7 @@ class URL:
             HTML code, got from the response
         """
         # can handle only http
-        assert self.scheme == 'http'
+        assert self.scheme in {'http', 'https'}
 
         # creates a socket
         s = socket.socket(
@@ -39,7 +54,13 @@ class URL:
             type=socket.SOCK_STREAM,
             proto=socket.IPPROTO_TCP
         )
-        s.connect((self.host, 80))
+        s.connect((self.host, self.port))
+        if self.scheme == 'https':
+            # context for encrypted connection
+            context = ssl.create_default_context()
+            # encrypts a socket connection
+            s = context.wrap_socket(s, server_hostname=self.host)
+
         s.send((f'GET {self.path} HTTP/1.0\r\n' +
                 f'Host: {self.host}\r\n\r\n').encode('utf8'))
 
@@ -65,3 +86,17 @@ class URL:
         s.close()
 
         return body
+
+    def show(self, body):
+        in_tag = False
+        for character in body:
+            if character == '<':
+                in_tag = True
+            elif character == '>':
+                in_tag = False
+            elif not in_tag:
+                print(character, end='')
+
+    def load(self):
+        body = self.request()
+        self.show(body)
