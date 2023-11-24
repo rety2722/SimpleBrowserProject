@@ -31,6 +31,17 @@ class URL:
 
         self.path = '/' + url
 
+        self.headers = {
+            '1.0': {
+                'Host': self.host
+            },
+            '1.1': {
+                'Host': self.host,
+                'Connection': 'close',
+                'User-agent': 'Rety'
+            }
+        }
+
     def request(self):
         """Makes a request and parses a response.
 
@@ -61,8 +72,7 @@ class URL:
             # encrypts a socket connection
             s = context.wrap_socket(s, server_hostname=self.host)
 
-        s.send((f'GET {self.path} HTTP/1.0\r\n' +
-                f'Host: {self.host}\r\n\r\n').encode('utf8'))
+        s.send(self.compose_request().encode('utf8'))
 
         # gets and handles response
         response = s.makefile('r', encoding='utf8', newline='\r\n')
@@ -87,14 +97,44 @@ class URL:
 
         return body
 
+    def compose_request(self, scheme='1.1'):
+        """Composes request message to send to a server
+
+        Parameters
+        ----------
+        scheme: str
+            is either 1.0 or 1.1 for http
+
+        Returns
+        -------
+        msg: str
+            Request message for a server
+        """
+        msg = f'GET {self.path} HTTP/{scheme}\r\n'
+        headers = self.headers[scheme]
+        for header in headers:
+            msg += f'{header}: {headers[header]}\r\n'
+        return msg + '\r\n'
+
     def show(self, body):
+        """Shows (prints) raw text of html file (without tags)
+
+        Parameters
+        ----------
+        body: str
+            HTML raw text
+
+        Returns
+        -------
+        None
+        """
         in_tag = False
         for character in body:
             if character == '<':
                 in_tag = True
             elif character == '>':
                 in_tag = False
-            elif not in_tag:
+            elif not in_tag:  # print if not inside tag marks (if not an html tag)
                 print(character, end='')
 
     def load(self):
