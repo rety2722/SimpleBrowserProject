@@ -1,5 +1,8 @@
 import socket
 import ssl
+import string
+
+from const import DEFAULT_URL, SCHEMES
 
 
 class URL:
@@ -12,6 +15,10 @@ class URL:
         """
         # parses url, could be done with urllib
         self.url = url
+
+        if url is None:
+            url = DEFAULT_URL
+
         self.scheme, url = url.split('://', 1)
 
         if '/' not in url:
@@ -56,8 +63,8 @@ class URL:
         body: str
             HTML code, got from the response
         """
-        # can handle only http
-        assert self.scheme in {'http', 'https'}
+        # can handle following schemes
+        assert self.scheme in SCHEMES
 
         # creates a socket
         s = socket.socket(
@@ -65,35 +72,47 @@ class URL:
             type=socket.SOCK_STREAM,
             proto=socket.IPPROTO_TCP
         )
-        s.connect((self.host, self.port))
-        if self.scheme == 'https':
-            # context for encrypted connection
-            context = ssl.create_default_context()
-            # encrypts a socket connection
-            s = context.wrap_socket(s, server_hostname=self.host)
+        # handles http request and response
+        if self.scheme in {'http', 'https'}:
 
-        s.send(self.compose_request().encode('utf8'))
+            s.connect((self.host, self.port))
+            if self.scheme == 'https':
+                # context for encrypted connection
+                context = ssl.create_default_context()
+                # encrypts a socket connection
+                s = context.wrap_socket(s, server_hostname=self.host)
 
-        # gets and handles response
-        response = s.makefile('r', encoding='utf8', newline='\r\n')
-        status_line = response.readline()
-        version, status, explanation = status_line.split(' ')
+            s.send(self.compose_request().encode('utf8'))
 
-        response_headers = {}
-        while True:
-            line = response.readline()
-            if line == '\r\n':
-                break
-            header, value = line.split(':', 1)
-            response_headers[header.casefold()] = value.strip()
+            # gets and handles response
+            response = s.makefile('r', encoding='UTF-8', newline='\r\n')
+            status_line = response.readline()
+            state = status_line.split(' ')  # version, status, explanation, etc
 
-        # unusual cases
-        assert 'transfer-encoding' not in response_headers
-        assert 'content-encoding' not in response_headers
+            response_headers = {}
+            while True:
+                line = response.readline()
+                if line == '\r\n':
+                    break
+                header, value = line.split(':', 1)
+                response_headers[header.casefold()] = value.strip()
 
-        # reads the rest of response
-        body = response.read()
-        s.close()
+            encoding = self.find_encoding(response_headers['content-type'])
+            if encoding:
+                response = s.makefile('r', encoding=encoding, newline='\r\n')
+
+            # reads the rest of response
+            body = response.read()
+            s.close()
+
+            # unusual cases
+            # assert 'transfer-encoding' not in response_headers
+            # assert 'content-encoding' not in response_headers
+
+        # handles file request and response
+        elif self.scheme in {'file'}:
+            with open(self.path[1:], 'r') as response:
+                body = response.read()
 
         return body
 
@@ -115,6 +134,27 @@ class URL:
         for header in headers:
             msg += f'{header}: {headers[header]}\r\n'
         return msg + '\r\n'
+
+    def find_encoding(self, content_type):
+        """Fetches encoding from content-type of response if it is provided
+
+        Parameters
+        ----------
+        content_type: str
+            All properties of content-type as string
+
+        Returns
+        -------
+        str
+            encoding scheme if any
+        """
+        if 'charset' in content_type:
+            properties = content_type.split(' ')
+            for p in properties:
+                if 'charset=' in p:
+                    encoding = p.split('=')[-1].strip(string.punctuation + ' ')
+                    return encoding
+        return None
 
     def show(self, body):
         """Shows (prints) raw text of html file (without tags)
