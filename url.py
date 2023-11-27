@@ -16,38 +16,55 @@ class URL:
         # parses url, could be done with urllib
         self.url = url
 
+        # dict of used schemes
+        self.schemes = dict.fromkeys(SCHEMES, False)
+
+        # sockets to keep alive
+        self.alive_sockets = set()
+
         if url is None:
             url = DEFAULT_URL
 
-        self.scheme, url = url.split('://', 1)
+        # support for data scheme
+        if url.startswith('data:'):
+            self.scheme, url = url.split(':', 1)
+            self.content_type, self.text = url.split(',', 1)
 
-        if '/' not in url:
-            url += '/'
-        self.host, url = url.split('/', 1)
+        else:
+            # support for view-source scheme
+            if url.startswith('view-source'):
+                self.schemes['view-source'] = True
+                _, url = url.split(':', 1)
 
-        # default port numbers
-        if self.scheme == 'http':
-            self.port = 80
-        elif self.scheme == 'https':
-            self.port = 443
+            self.scheme, url = url.split('://', 1)
 
-        # support of custom port
-        if ':' in self.host:
-            self.host, port = self.host.split(':', 1)
-            self.port = int(port)
+            if '/' not in url:
+                url += '/'
+            self.host, url = url.split('/', 1)
 
-        self.path = '/' + url
+            # default port numbers
+            if self.scheme == 'http':
+                self.port = 80
+            elif self.scheme == 'https':
+                self.port = 443
 
-        self.headers = {
-            '1.0': {
-                'Host': self.host
-            },
-            '1.1': {
-                'Host': self.host,
-                'Connection': 'close',
-                'User-agent': 'Rety'
+            # support of custom port
+            if ':' in self.host:
+                self.host, port = self.host.split(':', 1)
+                self.port = int(port)
+
+            self.path = '/' + url
+
+            self.headers = {
+                '1.0': {
+                    'Host': self.host
+                },
+                '1.1': {
+                    'Host': self.host,
+                    'Connection': 'close',
+                    'User-agent': 'Rety'
+                }
             }
-        }
 
     def request(self):
         """Makes a request and parses a response.
@@ -72,15 +89,15 @@ class URL:
             type=socket.SOCK_STREAM,
             proto=socket.IPPROTO_TCP
         )
+        # default body value
+        body = ''
         # handles http request and response
         if self.scheme in {'http', 'https'}:
 
             s.connect((self.host, self.port))
+            # encrypts connection
             if self.scheme == 'https':
-                # context for encrypted connection
-                context = ssl.create_default_context()
-                # encrypts a socket connection
-                s = context.wrap_socket(s, server_hostname=self.host)
+                s = self.encrypted_connect(s)
 
             s.send(self.compose_request().encode('utf8'))
 
@@ -97,22 +114,34 @@ class URL:
                 header, value = line.split(':', 1)
                 response_headers[header.casefold()] = value.strip()
 
+            # changes encoding it is not UTF-8
             encoding = self.find_encoding(response_headers['content-type'])
             if encoding:
                 response = s.makefile('r', encoding=encoding, newline='\r\n')
 
             # reads the rest of response
             body = response.read()
-            s.close()
+            self.alive_sockets.add(s)
 
             # unusual cases
             # assert 'transfer-encoding' not in response_headers
             # assert 'content-encoding' not in response_headers
 
         # handles file request and response
-        elif self.scheme in {'file'}:
+        elif self.scheme == 'file':
             with open(self.path[1:], 'r') as response:
                 body = response.read()
+
+        elif self.scheme == 'data':
+            if self.content_type == 'text/html':
+                body = f'''
+                <!doctype html>
+                <html>
+                <head></head>
+                <body>
+                {self.text}
+                </body>
+                </html>'''
 
         return body
 
@@ -156,6 +185,24 @@ class URL:
                     return encoding
         return None
 
+    def encrypted_connect(self, s):
+        """Encrypts a socket object for https
+
+        Parameters
+        ----------
+        s: socket.socket
+            Object to be encrypted
+
+        Returns
+        -------
+        s: socket.socket
+            Encrypted object
+            """
+        # context for encrypted connection
+        context = ssl.create_default_context()
+        # encrypts a socket connection
+        return context.wrap_socket(s, server_hostname=self.host)
+
     def show(self, body):
         """Shows (prints) raw text of html file (without tags)
 
@@ -168,14 +215,34 @@ class URL:
         -------
         None
         """
+        # support of html escape characters
+        escape_characters = {
+            '&lt;': '<',
+            '&gt;': '>'
+        }
+        max_esc_char = 5
         in_tag = False
-        for character in body:
-            if character == '<':
+        i = 0
+        while i < len(body):
+            if body[i] == '&':
+                esc_seq = ''
+                for j in range(max_esc_char):
+                    esc_seq += body[i + j]
+                    if i + j == len(body):
+                        i += 1
+                        continue
+                    if esc_seq in escape_characters:
+                        i += j + 1
+                        print(escape_characters[esc_seq], end='')
+                        continue
+
+            if body[i] == '<' and not self.schemes['view-source']:
                 in_tag = True
-            elif character == '>':
+            elif body[i] == '>' and not self.schemes['view-source']:
                 in_tag = False
             elif not in_tag:  # print if not inside tag marks (if not an html tag)
-                print(character, end='')
+                print(body[i], end='')
+            i += 1
 
     def load(self):
         body = self.request()
